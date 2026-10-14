@@ -1,0 +1,68 @@
+name: tapedeck
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: tapedeck
+      POSTGRES_PASSWORD: tapedeck
+      POSTGRES_DB: tapedeck
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tapedeck"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  api:
+    build: ../apps/api
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://tapedeck:tapedeck@db:5432/tapedeck
+      REDIS_URL: redis://redis:6379/0
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ../apps/api
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://tapedeck:tapedeck@db:5432/tapedeck
+      REDIS_URL: redis://redis:6379/0
+    command: arq app.workers.worker.WorkerSettings
+    depends_on:
+      - api
+
+  web:
+    build:
+      context: ../apps/web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
